@@ -5,3 +5,4 @@ plotly
 kaleido
 groq
 python-dotenv
+textblob
