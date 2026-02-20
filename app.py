@@ -1,7 +1,7 @@
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import plotly.io as pio  # Required for headless config
+import plotly.io as pio
 import yfinance as yf
 import re
 import io
@@ -10,8 +10,8 @@ from agents.orchestrator import analyze_stock
 from tools.stock_data import get_stock_stats
 from tools.news_sentiment import get_sentiment
 
-# --- 1. CRITICAL: HEADLESS CONFIGURATION ---
-# This forces the Plotly engine to work without a display (for Streamlit Cloud)
+# --- 1. CRITICAL: HEADLESS CONFIGURATION FOR CLOUD ---
+# Required for Kaleido to render charts on Linux servers (Streamlit Cloud)
 pio.kaleido.scope.chromium_args = (
     "--headless",
     "--no-sandbox",
@@ -26,14 +26,14 @@ def clean_text(text):
     text = re.sub(r'[^\x00-\x7F]+', '', text)
     return text.replace("#", "").replace("*", "").strip()
 
-def generate_pdf_report(ticker, stats, sentiment, report_text, fig):
+def generate_pdf_report(ticker, name, stats, sentiment, report_text, fig):
     """Creates a clean PDF with metrics, AI summary, and the price chart."""
     pdf = FPDF()
     pdf.add_page()
     
     # Header
     pdf.set_font("Helvetica", 'B', 16)
-    pdf.cell(0, 10, f"Executive Stock Report: {ticker}", ln=True, align='C')
+    pdf.cell(0, 10, f"Executive Stock Report: {name} ({ticker})", ln=True, align='C')
     pdf.ln(5)
     
     # Key Metrics Table
@@ -57,53 +57,61 @@ def generate_pdf_report(ticker, stats, sentiment, report_text, fig):
     pdf.cell(0, 10, "The Bottom Line", ln=True)
     pdf.set_font("Helvetica", size=10)
     
-    # Use session state report or truncate if too long
     content = report_text.split("Bottom Line")[-1] if "Bottom Line" in report_text else report_text
-    pdf.multi_cell(0, 7, clean_text(content[:1500])) # Limit to avoid overflow
+    pdf.multi_cell(0, 7, clean_text(content[:1500])) 
 
-    # --- THE CHART FIX ---
+    # Chart Embedding logic
     try:
-        # Convert plotly fig to PNG bytes using the headless engine
-        img_bytes = fig.to_image(format="png", engine="kaleido", width=800, height=450, scale=2)
+        img_bytes = fig.to_image(format="png", engine="kaleido", scale=2)
         img_stream = io.BytesIO(img_bytes)
-        
-        # Add to PDF
         pdf.image(img_stream, x=10, y=pdf.get_y() + 10, w=190)
     except Exception as e:
         pdf.set_font("Helvetica", 'I', 8)
-        pdf.cell(0, 10, f"(Render Error: {str(e)[:50]}... See logs)", ln=True)
+        pdf.cell(0, 10, f"(Render Error: {str(e)[:50]}...)", ln=True)
     
-    # Return as pure bytes
     return bytes(pdf.output())
 
 # --- 3. STREAMLIT UI SETUP ---
 st.set_page_config(page_title="AI Market Intelligence", layout="wide")
 
+# Initialize Session State
 if 'ai_report' not in st.session_state:
     st.session_state.ai_report = None
 if 'current_ticker' not in st.session_state:
     st.session_state.current_ticker = None
+if 'stock_name' not in st.session_state:
+    st.session_state.stock_name = None
 
 with st.sidebar:
     st.title("🎯 Controls")
-    ticker = st.text_input("Enter Ticker:", value="AAPL").upper()
+    ticker_input = st.text_input("Enter Ticker:", value="AAPL").upper()
     analyze_btn = st.button("Generate Full Analysis", use_container_width=True)
     st.divider()
     st.caption("⚡ Engine: Groq Llama 3.3 70B")
 
-st.title(f"📊 {ticker} Intelligence Dashboard")
+# Fetch and Store Stock Name dynamically
+if ticker_input:
+    try:
+        info = yf.Ticker(ticker_input).info
+        st.session_state.stock_name = info.get('longName') or info.get('shortName') or ticker_input
+    except:
+        st.session_state.stock_name = ticker_input
+
+st.title(f"📊 {st.session_state.stock_name} ({ticker_input}) Intelligence Dashboard")
 
 if analyze_btn:
     with st.spinner("Fetching data and generating AI insights..."):
-        st.session_state.stats = get_stock_stats(ticker)
-        st.session_state.sentiment = get_sentiment(ticker)
-        st.session_state.ai_report = analyze_stock(ticker)
-        st.session_state.current_ticker = ticker
+        st.session_state.stats = get_stock_stats(ticker_input)
+        st.session_state.sentiment = get_sentiment(ticker_input)
+        st.session_state.ai_report = analyze_stock(ticker_input)
+        st.session_state.current_ticker = ticker_input
 
-if st.session_state.ai_report and st.session_state.current_ticker == ticker:
+# Display Dashboard
+if st.session_state.ai_report and st.session_state.current_ticker == ticker_input:
     stats = st.session_state.stats
     sentiment_label = st.session_state.sentiment
     
+    # KPI Banner
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Current Price", f"${stats['price']}")
     m2.metric("vs 20-Day MA", f"${stats['ma_20']}", f"{round(stats['price'] - stats['ma_20'], 2)}")
@@ -119,7 +127,7 @@ if st.session_state.ai_report and st.session_state.current_ticker == ticker:
         range_map = {"1D":{"p":"1d","i":"1m"}, "1W":{"p":"5d","i":"30m"}, "1M":{"p":"1mo","i":"1d"}, "6M":{"p":"6mo","i":"1d"}, "1Y":{"p":"1y","i":"1wk"}, "5Y":{"p":"5y","i":"1mo"}}
         
         config = range_map[time_range]
-        hist_data = yf.Ticker(ticker).history(period=config["p"], interval=config["i"])
+        hist_data = yf.Ticker(ticker_input).history(period=config["p"], interval=config["i"])
         hist_data['SMA20'] = hist_data['Close'].rolling(window=20).mean()
         
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
@@ -136,9 +144,10 @@ if st.session_state.ai_report and st.session_state.current_ticker == ticker:
         with st.container(border=True):
             st.markdown(st.session_state.ai_report)
         
+        # PDF Generation Button
         try:
-            pdf_data = generate_pdf_report(ticker, stats, sentiment_label, st.session_state.ai_report, fig)
-            st.download_button("📄 Download PDF Report", data=pdf_data, file_name=f"{ticker}_Report.pdf", mime="application/pdf", use_container_width=True)
+            pdf_data = generate_pdf_report(ticker_input, st.session_state.stock_name, stats, sentiment_label, st.session_state.ai_report, fig)
+            st.download_button("📄 Download PDF Report", data=pdf_data, file_name=f"{ticker_input}_Report.pdf", mime="application/pdf", use_container_width=True)
         except Exception as e:
             st.error(f"Error: {e}")
 else:
