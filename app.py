@@ -52,13 +52,17 @@ def generate_pdf_report(ticker, stats, sentiment, report_text, fig):
     else:
         pdf.multi_cell(0, 7, clean_text(report_text[:300]) + "...")
 
-    # Embed the Chart
+    # --- FIX: EMBED THE CHART AS IMAGE ---
     try:
-        img_bytes = fig.to_image(format="png")
-        pdf.image(io.BytesIO(img_bytes), x=10, y=pdf.get_y() + 10, w=190)
-    except:
-        pdf.cell(0, 10, "(Visual chart could not be embedded)", ln=True)
+        # We use kaleido to convert the plotly figure to PNG bytes
+        img_bytes = fig.to_image(format="png", engine="kaleido")
+        img_stream = io.BytesIO(img_bytes)
+        pdf.image(img_stream, x=10, y=pdf.get_y() + 10, w=190)
+    except Exception as e:
+        pdf.set_font("Helvetica", 'I', 8)
+        pdf.cell(0, 10, f"(Visual chart could not be rendered: {str(e)})", ln=True)
     
+    # --- FIX: CONVERT BYTEARRAY TO BYTES FOR STREAMLIT ---
     return bytes(pdf.output())
 
 # --- 2. STREAMLIT UI SETUP ---
@@ -74,7 +78,6 @@ if 'stats' not in st.session_state:
 
 with st.sidebar:
     st.title("🎯 Controls")
-    # Manual input or Selectbox
     ticker = st.text_input("Enter Ticker:", value="AAPL").upper()
     analyze_btn = st.button("Generate Full Analysis", use_container_width=True)
     st.divider()
@@ -82,7 +85,6 @@ with st.sidebar:
 
 st.title(f"📊 {ticker} Intelligence Dashboard")
 
-# Execute Full Analysis Only on Button Click
 if analyze_btn:
     with st.spinner("Fetching data and generating AI insights..."):
         st.session_state.stats = get_stock_stats(ticker)
@@ -90,12 +92,10 @@ if analyze_btn:
         st.session_state.ai_report = analyze_stock(ticker)
         st.session_state.current_ticker = ticker
 
-# Only display if data exists in state and matches current ticker
 if st.session_state.ai_report and st.session_state.current_ticker == ticker:
     stats = st.session_state.stats
     sentiment_label = st.session_state.sentiment
     
-    # --- ROW 1: PRIMARY KPI BANNER ---
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Current Price", f"${stats['price']}")
     ma_diff = round(stats['price'] - stats['ma_20'], 2)
@@ -106,70 +106,46 @@ if st.session_state.ai_report and st.session_state.current_ticker == ticker:
 
     st.divider()
 
-    # --- ROW 2: VISUALS (DYNAMIC) & REPORT (STATIC) ---
     left_col, right_col = st.columns([1.5, 1])
 
     with left_col:
-        # Time Range Selector: Updates Chart ONLY
-        time_range = st.radio(
-            "Chart Timeframe:", 
-            ["1D", "1W", "1M", "6M", "1Y", "5Y"], 
-            horizontal=True, 
-            index=2
-        )
-        
+        time_range = st.radio("Chart Timeframe:", ["1D", "1W", "1M", "6M", "1Y", "5Y"], horizontal=True, index=2)
         range_map = {
             "1D": {"p": "1d", "i": "1m"}, "1W": {"p": "5d", "i": "30m"},
             "1M": {"p": "1mo", "i": "1d"}, "6M": {"p": "6mo", "i": "1d"},
             "1Y": {"p": "1y", "i": "1wk"}, "5Y": {"p": "5y", "i": "1mo"}
         }
-        
         config = range_map[time_range]
         hist_data = yf.Ticker(ticker).history(period=config["p"], interval=config["i"])
         
-        # Enhanced Subplot Chart
         hist_data['SMA20'] = hist_data['Close'].rolling(window=20).mean()
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                            vertical_spacing=0.05, row_heights=[0.7, 0.3])
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
-        fig.add_trace(go.Candlestick(
-            x=hist_data.index, open=hist_data['Open'],
-            high=hist_data['High'], low=hist_data['Low'],
-            close=hist_data['Close'], name="Price"
-        ), row=1, col=1)
-
-        fig.add_trace(go.Scatter(
-            x=hist_data.index, y=hist_data['SMA20'],
-            line=dict(color='orange', width=2), name="20-Day SMA"
-        ), row=1, col=1)
-
+        fig.add_trace(go.Candlestick(x=hist_data.index, open=hist_data['Open'], high=hist_data['High'], 
+                                     low=hist_data['Low'], close=hist_data['Close'], name="Price"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['SMA20'], line=dict(color='orange', width=2), name="20-Day SMA"), row=1, col=1)
         vol_colors = ['#26a69a' if c >= o else '#ef5350' for o, c in zip(hist_data['Open'], hist_data['Close'])]
-        fig.add_trace(go.Bar(
-            x=hist_data.index, y=hist_data['Volume'],
-            marker_color=vol_colors, name="Volume"
-        ), row=2, col=1)
-
+        fig.add_trace(go.Bar(x=hist_data.index, y=hist_data['Volume'], marker_color=vol_colors, name="Volume"), row=2, col=1)
         fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=500, margin=dict(t=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
 
     with right_col:
         st.subheader("🤖 Advisor's Take")
         st.markdown(f"### **Outlook: :{trend_color}[{stats['trend'].upper()}]**")
-        
         with st.container(border=True):
             st.markdown(st.session_state.ai_report)
         
-        # PDF Generation
-        pdf_data = generate_pdf_report(ticker, stats, sentiment_label, st.session_state.ai_report, fig)
-        st.download_button(
-            label="📄 Download PDF Summary",
-            data=pdf_data,
-            file_name=f"{ticker}_Report.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
-        
-        with st.expander("ℹ️ Risk Assessment & Disclaimers"):
-            st.caption("Investment involves risk. Analysis for educational purposes only.")
+        # --- FIX: CALL PDF GENERATOR ---
+        try:
+            pdf_data = generate_pdf_report(ticker, stats, sentiment_label, st.session_state.ai_report, fig)
+            st.download_button(
+                label="📄 Download PDF Summary",
+                data=pdf_data,
+                file_name=f"{ticker}_Report.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.error(f"PDF Generation Error: {str(e)}")
 else:
     st.info("👈 Enter a ticker and click 'Generate Full Analysis' to load the dashboard.")
