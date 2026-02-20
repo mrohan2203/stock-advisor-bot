@@ -54,9 +54,8 @@ def generate_pdf_report(ticker, stats, sentiment, report_text, fig):
 
     # Embed the Chart
     try:
-        img_bytes = fig.to_image(format="png", width=800, height=400)
-        img_stream = io.BytesIO(img_bytes)
-        pdf.image(img_stream, x=10, y=pdf.get_y() + 10, w=190)
+        img_bytes = fig.to_image(format="png")
+        pdf.image(io.BytesIO(img_bytes), x=10, y=pdf.get_y() + 10, w=190)
     except:
         pdf.cell(0, 10, "(Visual chart could not be embedded)", ln=True)
     
