@@ -1,0 +1,7 @@
+streamlit
+yfinance
+fpdf2
+plotly
+kaleido
+groq
+python-dotenv
