@@ -4,6 +4,8 @@ A modular, Python-based Stock Advisor Bot built with **Streamlit** that analyzes
 
 This project is designed with scalability in mind, separating business logic, tools, utilities, and UI components for clean extensibility and maintainability.
 
+App live on https://stock-advisor-bot.streamlit.app/
+
 ---
 
 ## 🚀 Features
